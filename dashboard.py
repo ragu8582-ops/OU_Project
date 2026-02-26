@@ -916,11 +916,10 @@ server = app.server  # gunicorn needs this line
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8050))
-    debug = os.environ.get("RENDER", None) is None  # debug=False on Render
-    print("\n" + "="*52)
-    print("  🏥  Montanaro OU Analytics Dashboard v2.0")
-    print("="*52)
-    print(f"  → http://0.0.0.0:{port}")
-    print("  → Ctrl+C to stop")
-    print("="*52 + "\n")
-    app.run(debug=debug, host="0.0.0.0", port=port)
+    app.run(
+        debug=False,
+        host="0.0.0.0",
+        port=port,
+        use_reloader=False,    # prevents signal thread error
+        dev_tools_hot_reload=False
+    )
