@@ -6,4 +6,4 @@ services:
     startCommand: gunicorn dashboard:server --bind 0.0.0.0:$PORT
     envVars:
       - key: RENDER
-        value: true
+        value: "true"
