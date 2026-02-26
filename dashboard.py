@@ -1,51 +1,28 @@
 # =============================================================================
 # HOSPITAL OBSERVATION UNIT — Premium Analytics Dashboard v2.0
 # BDA 640 Final Case Report
-# Run: python3 dashboard.py → open http://127.0.0.1:8050
+# Streamlit version — deploy on Streamlit Cloud
+# Run locally: streamlit run dashboard.py
 # =============================================================================
 
+import os
+import warnings
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import warnings
+import streamlit as st
+
 warnings.filterwarnings("ignore")
 
-import dash
-from dash import dcc, html, Input, Output
-import dash_bootstrap_components as dbc
-
 # =============================================================================
-# DATA
+# PAGE CONFIG
 # =============================================================================
-# ── Streamlit Cloud compatible path resolution ──
-import os
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(BASE_DIR, "data", "OUData_cleaned.csv")
-df = pd.read_csv(DATA_FILE)
-
-DRG_MAP = {
-    276:"Dehydration", 428:"Congestive Heart Failure", 486:"Pneumonia",
-    558:"Colitis",     577:"Pancreatitis",             578:"GI Bleeding",
-    599:"Urinary Tract Infection", 780:"Syncope",       782:"Edema",
-    786:"Chest Pain",  787:"Nausea",                   789:"Abdominal Pain",
-}
-df["DiagnosisName"] = df["DRG01"].map(DRG_MAP)
-df["AgeGroup"]      = pd.cut(df["Age"], bins=[0,40,55,65,75,89],
-                             labels=["18-40","41-55","56-65","66-75","76+"])
-
-try:
-    drg_risk         = pd.read_csv(os.path.join(BASE_DIR, "model_outputs", "drg_risk_scores.csv"))
-    model_comparison = pd.read_csv(os.path.join(BASE_DIR, "model_outputs", "model_comparison.csv"))
-    MODEL_RAN        = True
-except FileNotFoundError:
-    MODEL_RAN = False
-    drg_risk  = (
-        df.groupby(["DRG01","DiagnosisName"])["Flipped"]
-        .agg(Avg_Prob="mean", Count="count").reset_index()
-    )
-    drg_risk["Actual_Rate"]  = drg_risk["Avg_Prob"]
-    drg_risk["Avg_Prob_Pct"] = (drg_risk["Avg_Prob"] * 100).round(1)
+st.set_page_config(
+    page_title="Montanaro OU Analytics",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 # =============================================================================
 # PALETTE
@@ -75,6 +52,163 @@ CHART_BASE = dict(
 )
 
 # =============================================================================
+# CUSTOM CSS
+# =============================================================================
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* ── Global ── */
+html, body, [class*="css"] {
+    font-family: 'Inter', system-ui, sans-serif !important;
+    background-color: #0A0E1A;
+    color: #F1F5F9;
+}
+.stApp { background-color: #0A0E1A; }
+
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #111827 0%, #0d1526 100%) !important;
+    border-right: 1px solid #1E293B;
+}
+section[data-testid="stSidebar"] * { color: #94A3B8 !important; }
+section[data-testid="stSidebar"] .stRadio label { font-size: 0.85rem !important; }
+
+/* ── Metric cards ── */
+div[data-testid="metric-container"] {
+    background: rgba(17,24,39,0.9);
+    border: 1px solid #1E293B;
+    border-radius: 16px;
+    padding: 16px 18px;
+}
+div[data-testid="metric-container"] label { color: #64748B !important; font-size: 0.72rem !important; text-transform: uppercase; letter-spacing: 0.6px; }
+div[data-testid="metric-container"] div[data-testid="stMetricValue"] { color: #F1F5F9 !important; font-size: 1.85rem !important; font-weight: 800 !important; }
+
+/* ── Cards ── */
+.glass-card {
+    background: rgba(17,24,39,0.85);
+    border: 1px solid #1E293B;
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 16px;
+}
+
+/* ── Section headers ── */
+h1, h2, h3 { color: #F1F5F9 !important; font-family: 'Inter', system-ui, sans-serif !important; }
+
+/* ── Selectbox / Dropdown ── */
+div[data-testid="stSelectbox"] > div,
+div[data-testid="stMultiSelect"] > div {
+    background: #1A2233 !important;
+    border: 1px solid #1E293B !important;
+    border-radius: 8px !important;
+    color: #F1F5F9 !important;
+}
+
+/* ── Slider ── */
+div[data-testid="stSlider"] { padding: 4px 0; }
+
+/* ── Checkbox / Radio ── */
+.stCheckbox label, .stRadio label { color: #94A3B8 !important; font-size: 0.83rem !important; }
+
+/* ── Divider ── */
+hr { border-color: #1E293B !important; }
+
+/* ── Button ── */
+.stButton > button {
+    background: linear-gradient(135deg, #6366F1, #EC4899);
+    color: white; border: none; border-radius: 10px;
+    font-weight: 600; padding: 8px 20px;
+}
+
+/* ── Plotly chart bg ── */
+.js-plotly-plot { border-radius: 12px; }
+
+/* ── Risk badges ── */
+.risk-high   { background: rgba(239,68,68,0.15);  color: #F87171; border: 1px solid rgba(239,68,68,0.3);  padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; display:inline-block; }
+.risk-medium { background: rgba(245,158,11,0.15); color: #FCD34D; border: 1px solid rgba(245,158,11,0.3); padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; display:inline-block; }
+.risk-low    { background: rgba(16,185,129,0.15);  color: #34D399; border: 1px solid rgba(16,185,129,0.3); padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; display:inline-block; }
+
+.excl-item { display:flex; align-items:center; gap:10px; padding:9px 13px; border-radius:10px; margin-bottom:5px; font-size:0.83rem; color:#CBD5E1; }
+.excl-current { background:rgba(100,116,139,0.08); border:1px solid rgba(100,116,139,0.15); }
+.excl-add     { background:rgba(16,185,129,0.07);  border:1px solid rgba(16,185,129,0.18);  color:#6EE7B7; }
+
+.impact-box {
+    background: rgba(17,24,39,0.9); border: 1px solid #1E293B;
+    border-radius: 16px; padding: 20px; text-align: center;
+}
+.impact-num { font-size: 2rem; font-weight: 800; letter-spacing: -1px; line-height:1; }
+.impact-label { font-size: 0.72rem; font-weight:600; color:#64748B; text-transform:uppercase; letter-spacing:0.6px; margin-top:4px; }
+.impact-sub   { font-size: 0.7rem; color:#475569; margin-top:3px; }
+
+.topbar-badge {
+    background: linear-gradient(135deg,#6366F1,#EC4899);
+    color: white; font-size: 0.75rem; font-weight: 600;
+    padding: 4px 14px; border-radius: 20px; display:inline-block;
+}
+.live-dot {
+    display:inline-block; width:8px; height:8px;
+    background:#10B981; border-radius:50%; margin-right:6px;
+    animation: pulseDot 2s infinite;
+}
+@keyframes pulseDot {
+    0%,100%{opacity:1;transform:scale(1);}
+    50%{opacity:0.4;transform:scale(1.4);}
+}
+.info-banner {
+    background:rgba(99,102,241,0.07); border:1px solid rgba(99,102,241,0.2);
+    border-radius:12px; padding:12px 16px; margin-bottom:16px;
+    color:#94A3B8; font-size:0.82rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =============================================================================
+# DATA LOADING
+# =============================================================================
+@st.cache_data
+def load_data():
+    BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+    DATA_FILE = os.path.join(BASE_DIR, "data", "OUData_cleaned.csv")
+    df = pd.read_csv(DATA_FILE)
+
+    DRG_MAP = {
+        276:"Dehydration",         428:"Congestive Heart Failure",
+        486:"Pneumonia",           558:"Colitis",
+        577:"Pancreatitis",        578:"GI Bleeding",
+        599:"Urinary Tract Infection", 780:"Syncope",
+        782:"Edema",               786:"Chest Pain",
+        787:"Nausea",              789:"Abdominal Pain",
+    }
+    df["DiagnosisName"] = df["DRG01"].map(DRG_MAP)
+    df["AgeGroup"] = pd.cut(df["Age"], bins=[0,40,55,65,75,89],
+                            labels=["18-40","41-55","56-65","66-75","76+"])
+    return df
+
+@st.cache_data
+def load_model_outputs():
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    try:
+        drg_risk         = pd.read_csv(os.path.join(BASE_DIR, "model_outputs", "drg_risk_scores.csv"))
+        model_comparison = pd.read_csv(os.path.join(BASE_DIR, "model_outputs", "model_comparison.csv"))
+        return drg_risk, model_comparison, True
+    except FileNotFoundError:
+        return None, None, False
+
+df = load_data()
+drg_risk_raw, model_comparison, MODEL_RAN = load_model_outputs()
+
+if not MODEL_RAN:
+    drg_risk = (
+        df.groupby(["DRG01","DiagnosisName"])["Flipped"]
+        .agg(Avg_Prob="mean", Count="count").reset_index()
+    )
+    drg_risk["Actual_Rate"]  = drg_risk["Avg_Prob"]
+    drg_risk["Avg_Prob_Pct"] = (drg_risk["Avg_Prob"] * 100).round(1)
+else:
+    drg_risk = drg_risk_raw
+
+# =============================================================================
 # KPIs
 # =============================================================================
 total_patients  = len(df)
@@ -94,152 +228,19 @@ flip_by_drg = (
 flip_by_drg["Pct"] = (flip_by_drg["Flip_Rate"] * 100).round(1)
 
 # =============================================================================
-# CSS
-# =============================================================================
-CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0A0E1A; font-family: 'Inter', system-ui, sans-serif; color: #F1F5F9; overflow-x: hidden; }
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-track { background: #111827; }
-::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
-
-.sidebar {
-    position: fixed; left: 0; top: 0; width: 220px; height: 100vh;
-    background: linear-gradient(180deg,#111827 0%,#0d1526 100%);
-    border-right: 1px solid #1E293B; z-index: 100;
-    display: flex; flex-direction: column;
-}
-.sidebar-logo { padding: 22px 18px 18px; border-bottom: 1px solid #1E293B; }
-.sidebar-logo h3 { font-size: 0.95rem; font-weight: 700; color: #F1F5F9; line-height: 1.3; }
-.sidebar-logo p  { font-size: 0.7rem;  color: #64748B; margin-top: 3px; }
-.sidebar-nav  { padding: 14px 10px; flex: 1; }
-.nav-section-label { font-size: 0.62rem; font-weight: 700; color: #475569;
-    text-transform: uppercase; letter-spacing: 1px; padding: 8px 8px 4px; }
-.nav-btn {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 12px; border-radius: 10px; cursor: pointer;
-    transition: all 0.2s ease; margin-bottom: 2px;
-    border: 1px solid transparent; background: transparent;
-    color: #94A3B8; font-size: 0.83rem; font-weight: 500;
-    width: 100%; text-align: left; font-family: 'Inter', system-ui, sans-serif;
-}
-.nav-btn:hover { background: rgba(99,102,241,0.1); color: #C7D2FE; }
-.nav-btn.active {
-    background: linear-gradient(135deg,rgba(99,102,241,0.2) 0%,rgba(236,72,153,0.1) 100%);
-    color: #A5B4FC; border-color: rgba(99,102,241,0.25);
-}
-.nav-icon { font-size: 1rem; width: 18px; text-align: center; }
-.sidebar-footer { padding: 14px 18px; border-top: 1px solid #1E293B; }
-.sidebar-footer p { font-size: 0.68rem; color: #475569; }
-
-.main-content { margin-left: 220px; min-height: 100vh; background: #0A0E1A; }
-
-.topbar {
-    background: rgba(17,24,39,0.96); backdrop-filter: blur(12px);
-    border-bottom: 1px solid #1E293B; padding: 13px 26px;
-    display: flex; align-items: center; justify-content: space-between;
-    position: sticky; top: 0; z-index: 50;
-}
-.topbar-title { font-size: 1.05rem; font-weight: 700; color: #F1F5F9; }
-.topbar-badge {
-    background: linear-gradient(135deg,#6366F1,#EC4899);
-    color: white; font-size: 0.7rem; font-weight: 600;
-    padding: 4px 12px; border-radius: 20px;
-}
-.live-dot {
-    width: 7px; height: 7px; background: #10B981; border-radius: 50%;
-    display: inline-block; margin-right: 6px;
-    animation: pulseDot 2s infinite;
-}
-@keyframes pulseDot {
-    0%,100% { opacity:1; transform:scale(1); }
-    50%      { opacity:0.4; transform:scale(1.4); }
-}
-.page-content { padding: 22px 26px; }
-
-.glass-card {
-    background: rgba(17,24,39,0.85); border: 1px solid #1E293B;
-    border-radius: 16px; padding: 18px; backdrop-filter: blur(8px);
-    transition: transform 0.2s ease, box-shadow 0.2s ease; margin-bottom: 18px;
-}
-.glass-card:hover { transform: translateY(-2px); box-shadow: 0 10px 36px rgba(0,0,0,0.45); }
-
-.kpi-card {
-    background: rgba(17,24,39,0.9); border: 1px solid #1E293B;
-    border-radius: 16px; padding: 16px 18px; position: relative;
-    overflow: hidden; transition: all 0.3s ease; height: 100%;
-}
-.kpi-card:hover { transform: translateY(-3px); box-shadow: 0 14px 44px rgba(0,0,0,0.5); }
-.kpi-card::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0;
-    height: 3px; border-radius: 16px 16px 0 0;
-}
-.kpi-card.red::before    { background: linear-gradient(90deg,#EC4899,#F43F5E); }
-.kpi-card.blue::before   { background: linear-gradient(90deg,#3B82F6,#6366F1); }
-.kpi-card.green::before  { background: linear-gradient(90deg,#10B981,#06B6D4); }
-.kpi-card.amber::before  { background: linear-gradient(90deg,#F59E0B,#EF4444); }
-.kpi-card.indigo::before { background: linear-gradient(90deg,#6366F1,#8B5CF6); }
-.kpi-card.teal::before   { background: linear-gradient(90deg,#06B6D4,#3B82F6); }
-.kpi-icon  { font-size: 1.5rem; margin-bottom: 8px; display: block; }
-.kpi-value { font-size: 1.85rem; font-weight: 800; line-height: 1; margin-bottom: 4px; letter-spacing: -0.5px; }
-.kpi-value.red    { color: #F87171; }
-.kpi-value.blue   { color: #60A5FA; }
-.kpi-value.green  { color: #34D399; }
-.kpi-value.amber  { color: #FCD34D; }
-.kpi-value.indigo { color: #A5B4FC; }
-.kpi-value.teal   { color: #67E8F9; }
-.kpi-label { font-size: 0.72rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.6px; }
-.kpi-sub   { font-size: 0.7rem; color: #475569; margin-top: 5px; }
-
-.section-header { margin-bottom: 18px; }
-.section-header h4 { font-size: 1.05rem; font-weight: 700; color: #F1F5F9; margin-bottom: 3px; }
-.section-header p  { font-size: 0.8rem; color: #64748B; }
-
-.chart-title { font-size: 0.85rem; font-weight: 600; color: #CBD5E1; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
-.filter-label { font-size: 0.72rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; display: block; }
-.filter-panel { background: rgba(17,24,39,0.9); border: 1px solid #1E293B; border-radius: 16px; padding: 18px; margin-bottom: 18px; }
-.divider { border: none; border-top: 1px solid #1E293B; margin: 14px 0; }
-
-.excl-item { display: flex; align-items: center; gap: 10px; padding: 9px 13px; border-radius: 10px; margin-bottom: 5px; font-size: 0.83rem; color: #CBD5E1; }
-.excl-item.current { background: rgba(100,116,139,0.08); border: 1px solid rgba(100,116,139,0.15); }
-.excl-item.add     { background: rgba(16,185,129,0.07); border: 1px solid rgba(16,185,129,0.18); color: #6EE7B7; }
-
-.risk-high   { background: rgba(239,68,68,0.12);  color: #F87171; border: 1px solid rgba(239,68,68,0.25);  padding: 2px 9px; border-radius: 20px; font-size: 0.73rem; font-weight: 600; }
-.risk-medium { background: rgba(245,158,11,0.12); color: #FCD34D; border: 1px solid rgba(245,158,11,0.25); padding: 2px 9px; border-radius: 20px; font-size: 0.73rem; font-weight: 600; }
-.risk-low    { background: rgba(16,185,129,0.12); color: #34D399; border: 1px solid rgba(16,185,129,0.25); padding: 2px 9px; border-radius: 20px; font-size: 0.73rem; font-weight: 600; }
-
-.impact-num { font-size: 2rem; font-weight: 800; letter-spacing: -1px; line-height: 1; }
-
-.vitals-row-item {
-    padding: 10px 14px; background: rgba(255,255,255,0.03);
-    border-radius: 10px; border: 1px solid #1E293B; margin-bottom: 7px;
-}
-.progress-bg  { background: rgba(255,255,255,0.06); border-radius: 4px; height: 5px; overflow: hidden; margin-top: 5px; }
-.progress-fill { height: 100%; border-radius: 4px; }
-
-.info-banner {
-    background: rgba(99,102,241,0.07); border: 1px solid rgba(99,102,241,0.2);
-    border-radius: 12px; padding: 12px 16px; margin-bottom: 18px;
-    display: flex; align-items: center; gap: 10px; color: #94A3B8; font-size: 0.82rem;
-}
-"""
-
-# =============================================================================
-# CHART BUILDERS
+# CHART HELPERS
 # =============================================================================
 def CL(**kw):
-    """Merge base chart layout with overrides."""
     out = {**CHART_BASE}
     out.update(kw)
     return out
 
 def make_flip_drg():
-    data = flip_by_drg.copy()
+    data   = flip_by_drg.copy()
     colors = [ACCENT2 if p>60 else (ACCENT4 if p>45 else ACCENT5) for p in data["Pct"]]
     fig = go.Figure(go.Bar(
         x=data["Pct"], y=data["DiagnosisName"], orientation="h",
-        marker=dict(color=colors, line=dict(color="rgba(255,255,255,0.04)",width=1)),
+        marker=dict(color=colors),
         text=[f"{p}%  (n={n})" for p,n in zip(data["Pct"],data["Total"])],
         textposition="inside", textfont=dict(color="rgba(255,255,255,0.9)",size=11),
         hovertemplate="<b>%{y}</b><br>Flip Rate: %{x:.1f}%<extra></extra>",
@@ -250,28 +251,29 @@ def make_flip_drg():
     fig.update_layout(**CL(
         xaxis=dict(title="Flip Rate (%)",ticksuffix="%",range=[0,100],
                    gridcolor="rgba(255,255,255,0.04)",color=TEXT_SEC),
-        yaxis=dict(title="",color=TEXT_SEC),height=400,
+        yaxis=dict(title="",color=TEXT_SEC), height=420,
     ))
     return fig
 
-def make_los():
+def make_los(dff=None):
+    if dff is None: dff = df
     fig = go.Figure()
     for lbl,color,fill,sub in [
-        ("Stayed",  ACCENT5,"rgba(59,130,246,0.15)",  df[df["Flipped"]==0]),
-        ("Flipped", ACCENT2,"rgba(236,72,153,0.15)",  df[df["Flipped"]==1]),
+        ("Stayed",  ACCENT5,"rgba(59,130,246,0.15)",  dff[dff["Flipped"]==0]),
+        ("Flipped", ACCENT2,"rgba(236,72,153,0.15)",  dff[dff["Flipped"]==1]),
     ]:
-        fig.add_trace(go.Violin(y=sub["OU_LOS_hrs"],name=lbl,box_visible=True,
-            meanline_visible=True,fillcolor=fill,line_color=color,opacity=0.9,
-            points="outliers",marker=dict(size=3,color=color,opacity=0.4)))
-    fig.add_hline(y=48,line_dash="dot",line_color="rgba(255,255,255,0.2)",
+        if len(sub)>0:
+            fig.add_trace(go.Violin(y=sub["OU_LOS_hrs"],name=lbl,box_visible=True,
+                meanline_visible=True,fillcolor=fill,line_color=color,opacity=0.9,
+                points="outliers",marker=dict(size=3,color=color,opacity=0.4)))
+    fig.add_hline(y=48, line_dash="dot", line_color="rgba(255,255,255,0.2)",
                   annotation_text="48-hr target",
                   annotation_font=dict(color=TEXT_SEC,size=10),
                   annotation_position="top right")
     fig.update_layout(**CL(
         yaxis=dict(title="Hours in OU",color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-        xaxis=dict(color=TEXT_SEC),height=340,
-        legend=dict(orientation="h",y=1.08,bgcolor="rgba(0,0,0,0)",
-                    font=dict(color=TEXT_SEC,size=11)),
+        xaxis=dict(color=TEXT_SEC), height=360,
+        legend=dict(orientation="h",y=1.08,bgcolor="rgba(0,0,0,0)",font=dict(color=TEXT_SEC,size=11)),
     ))
     return fig
 
@@ -284,23 +286,22 @@ def make_heatmap():
                     [0.7,ACCENT4],[1.0,ACCENT2]],
         text=hm.values, texttemplate="%{text:.0f}%",
         textfont=dict(size=11,color="white"),
-        colorbar=dict(ticksuffix="%",
-                      tickfont=dict(color=TEXT_SEC),
+        colorbar=dict(ticksuffix="%", tickfont=dict(color=TEXT_SEC),
                       title=dict(text="Flip %",font=dict(color=TEXT_SEC))),
         hovertemplate="<b>%{y}</b><br>Age: %{x}<br>Flip Rate: %{z:.1f}%<extra></extra>",
     ))
     fig.update_layout(**CL(
         xaxis=dict(title="Age Group",color=TEXT_SEC),
-        yaxis=dict(title="",color=TEXT_SEC),height=430,
+        yaxis=dict(title="",color=TEXT_SEC), height=450,
     ))
     return fig
 
 def make_radar():
     vitals = ["BloodPressureUpper","BloodPressureLower","Pulse","PulseOximetry","Respirations","Temperature"]
     labels = ["Systolic BP","Diastolic BP","Heart Rate","O2 Sat","Respirations","Temperature"]
-    s = df[df["Flipped"]==0][vitals].mean()
-    f = df[df["Flipped"]==1][vitals].mean()
-    mn,mx = df[vitals].min(),df[vitals].max()
+    s  = df[df["Flipped"]==0][vitals].mean()
+    f  = df[df["Flipped"]==1][vitals].mean()
+    mn = df[vitals].min(); mx = df[vitals].max()
     sn = ((s-mn)/(mx-mn)*100).round(1)
     fn = ((f-mn)/(mx-mn)*100).round(1)
     fig = go.Figure()
@@ -322,7 +323,7 @@ def make_radar():
                 tickfont=dict(color=TEXT_SEC,size=10),color=TEXT_SEC),
         ),
         paper_bgcolor="rgba(0,0,0,0)", font=dict(family=FONT,color=TEXT_PRI),
-        margin=dict(l=46,r=46,t=26,b=46), height=380,
+        margin=dict(l=46,r=46,t=26,b=46), height=400,
         legend=dict(orientation="h",y=-0.1,bgcolor="rgba(0,0,0,0)",
                     font=dict(color=TEXT_SEC,size=11)),
     )
@@ -335,20 +336,20 @@ def make_flags():
     sp = (df[df["Flipped"]==0][cols].mean()*100).round(1)
     fig = go.Figure()
     fig.add_trace(go.Bar(name="Stayed", x=labels, y=sp,
-        marker=dict(color=ACCENT5,line=dict(color="rgba(255,255,255,0.04)",width=1)),opacity=0.85))
+        marker=dict(color=ACCENT5), opacity=0.85))
     fig.add_trace(go.Bar(name="Flipped",x=labels, y=fp,
-        marker=dict(color=ACCENT2,line=dict(color="rgba(255,255,255,0.04)",width=1)),opacity=0.85))
+        marker=dict(color=ACCENT2), opacity=0.85))
     fig.update_layout(**CL(
         barmode="group",
         yaxis=dict(title="% with Flag",ticksuffix="%",color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-        xaxis=dict(color=TEXT_SEC),height=310,
+        xaxis=dict(color=TEXT_SEC), height=330,
         legend=dict(orientation="h",y=1.1,bgcolor="rgba(0,0,0,0)",font=dict(color=TEXT_SEC,size=11)),
     ))
     return fig
 
 def make_model_bar():
     def blank(msg):
-        fig=go.Figure()
+        fig = go.Figure()
         fig.add_annotation(text=msg,xref="paper",yref="paper",x=0.5,y=0.5,
             showarrow=False,font=dict(size=13,color=TEXT_SEC,family=FONT),align="center")
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)",
@@ -356,15 +357,15 @@ def make_model_bar():
             xaxis=dict(visible=False),yaxis=dict(visible=False))
         return fig
     if not MODEL_RAN:
-        return blank("Run python3 predictive_model.py<br>then restart the dashboard")
+        return blank("Run python3 predictive_model.py<br>then redeploy")
     try:
         mc   = model_comparison.copy()
         aucs = mc["ROC-AUC"].astype(str).str.extract(r"([\d\.]+)")[0].astype(float)
-        colors=[ACCENT5,ACCENT2,ACCENT3]
-        fig=go.Figure()
+        colors = [ACCENT5, ACCENT2, ACCENT3]
+        fig = go.Figure()
         for m,a,c in zip(mc["Model"],aucs,colors):
             fig.add_trace(go.Bar(x=[m],y=[a],name=m,width=0.5,
-                marker=dict(color=c,line=dict(color="rgba(255,255,255,0.06)",width=1)),
+                marker=dict(color=c),
                 text=[f"AUC = {a:.3f}"],textposition="outside",
                 textfont=dict(color=TEXT_PRI,size=12)))
         fig.add_hline(y=0.5,line_dash="dot",line_color="rgba(255,255,255,0.15)",
@@ -382,18 +383,22 @@ def make_model_bar():
 
 def make_drg_risk():
     try:
-        data=drg_risk.copy()
+        data = drg_risk.copy()
         if "Avg_Prob_Pct" not in data.columns:
-            data["Avg_Prob_Pct"]=(data["Avg_Prob"]*100).round(1)
+            data["Avg_Prob_Pct"] = (data["Avg_Prob"]*100).round(1)
         if "DiagnosisName" not in data.columns and "DRG01" in data.columns:
-            data["DiagnosisName"]=data["DRG01"].map(DRG_MAP).fillna(data["DRG01"].astype(str))
-        data=data.sort_values("Avg_Prob_Pct",ascending=True)
-        colors=[ACCENT2 if p>55 else (ACCENT4 if p>35 else ACCENT5) for p in data["Avg_Prob_Pct"]]
-        fig=go.Figure(go.Bar(
-            x=data["Avg_Prob_Pct"],y=data["DiagnosisName"],orientation="h",
-            marker=dict(color=colors,line=dict(color="rgba(255,255,255,0.04)",width=1)),
+            DRG_MAP = {276:"Dehydration",428:"Congestive Heart Failure",486:"Pneumonia",
+                       558:"Colitis",577:"Pancreatitis",578:"GI Bleeding",
+                       599:"Urinary Tract Infection",780:"Syncope",782:"Edema",
+                       786:"Chest Pain",787:"Nausea",789:"Abdominal Pain"}
+            data["DiagnosisName"] = data["DRG01"].map(DRG_MAP).fillna(data["DRG01"].astype(str))
+        data   = data.sort_values("Avg_Prob_Pct", ascending=True)
+        colors = [ACCENT2 if p>55 else (ACCENT4 if p>35 else ACCENT5) for p in data["Avg_Prob_Pct"]]
+        fig = go.Figure(go.Bar(
+            x=data["Avg_Prob_Pct"], y=data["DiagnosisName"], orientation="h",
+            marker=dict(color=colors),
             text=[f"  {p:.0f}%  " for p in data["Avg_Prob_Pct"]],
-            textposition="inside",textfont=dict(color="rgba(255,255,255,0.9)",size=11),
+            textposition="inside", textfont=dict(color="rgba(255,255,255,0.9)",size=11),
             hovertemplate="<b>%{y}</b><br>Flip Prob: %{x:.1f}%<extra></extra>",
         ))
         fig.add_vline(x=55,line_dash="dash",line_color="rgba(255,255,255,0.18)",
@@ -403,11 +408,11 @@ def make_drg_risk():
         fig.update_layout(**CL(
             xaxis=dict(title="Predicted Flip Probability (%)",ticksuffix="%",range=[0,100],
                        color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-            yaxis=dict(title="",color=TEXT_SEC),height=420,
+            yaxis=dict(title="",color=TEXT_SEC), height=440,
         ))
         return fig
     except Exception as e:
-        fig=go.Figure()
+        fig = go.Figure()
         fig.add_annotation(text=f"Error: {e}",xref="paper",yref="paper",x=0.5,y=0.5,
             showarrow=False,font=dict(size=12,color=ACCENT2,family=FONT))
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)",height=340,
@@ -415,25 +420,25 @@ def make_drg_risk():
         return fig
 
 def make_waterfall(target_pct):
-    extra=max(0,round(current_per_wk*(1-target_pct/100)/(1-0.46))-current_per_wk)
-    fig=go.Figure(go.Waterfall(
-        orientation="v",measure=["absolute","relative","total"],
-        x=["Current\nBaseline",f"Reduce flip\nto {target_pct}%","Projected\nCapacity"],
-        y=[current_per_wk,extra,0],
-        text=[f"44/wk",f"+{extra}/wk",f"{current_per_wk+extra}/wk"],
-        textposition="outside",textfont=dict(color=TEXT_PRI,size=12),
+    extra = max(0, round(current_per_wk*(1-target_pct/100)/(1-0.46)) - current_per_wk)
+    fig   = go.Figure(go.Waterfall(
+        orientation="v", measure=["absolute","relative","total"],
+        x=["Current\nBaseline", f"Reduce flip\nto {target_pct}%", "Projected\nCapacity"],
+        y=[current_per_wk, extra, 0],
+        text=[f"44/wk", f"+{extra}/wk", f"{current_per_wk+extra}/wk"],
+        textposition="outside", textfont=dict(color=TEXT_PRI,size=12),
         connector=dict(line=dict(color="rgba(255,255,255,0.08)",dash="dot")),
-        increasing=dict(marker=dict(color=ACCENT3,line=dict(color=ACCENT3,width=1))),
-        totals=dict(marker=dict(color=ACCENT1,line=dict(color=ACCENT1,width=1))),
+        increasing=dict(marker=dict(color=ACCENT3)),
+        totals=dict(marker=dict(color=ACCENT1)),
     ))
     fig.update_layout(**CL(
         yaxis=dict(title="Patients / Week",color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-        xaxis=dict(color=TEXT_SEC),height=320,
+        xaxis=dict(color=TEXT_SEC), height=340,
     ))
     return fig
 
-def make_age_hist_fig(dff):
-    fig=go.Figure()
+def make_age_hist(dff):
+    fig = go.Figure()
     for lbl,color,sub in [("Stayed",ACCENT5,dff[dff["Flipped"]==0]),
                            ("Flipped",ACCENT2,dff[dff["Flipped"]==1])]:
         fig.add_trace(go.Histogram(x=sub["Age"],name=lbl,opacity=0.8,
@@ -442,30 +447,29 @@ def make_age_hist_fig(dff):
         barmode="overlay",
         xaxis=dict(title="Age (years)",color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
         yaxis=dict(title="%",ticksuffix="%",color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-        height=270,
+        height=290,
         legend=dict(orientation="h",y=1.1,bgcolor="rgba(0,0,0,0)",font=dict(color=TEXT_SEC,size=11)),
     ))
     return fig
 
-def make_ins_bar_fig(dff):
-    ins=dff.groupby("InsuranceGroup")["Flipped"].agg(["mean","count"]).reset_index()
-    ins["Pct"]=(ins["mean"]*100).round(1)
-    fig=go.Figure(go.Bar(
-        x=ins["InsuranceGroup"],y=ins["Pct"],width=0.5,
-        marker=dict(color=[ACCENT2,ACCENT5,ACCENT3][:len(ins)],
-                    line=dict(color="rgba(255,255,255,0.04)",width=1)),
-        text=[f"{p}%" for p in ins["Pct"]],textposition="outside",
+def make_ins_bar(dff):
+    ins = dff.groupby("InsuranceGroup")["Flipped"].agg(["mean","count"]).reset_index()
+    ins["Pct"] = (ins["mean"]*100).round(1)
+    fig = go.Figure(go.Bar(
+        x=ins["InsuranceGroup"], y=ins["Pct"], width=0.5,
+        marker=dict(color=[ACCENT2,ACCENT5,ACCENT3][:len(ins)]),
+        text=[f"{p}%" for p in ins["Pct"]], textposition="outside",
         textfont=dict(color=TEXT_PRI,size=12),
     ))
     fig.update_layout(**CL(
         yaxis=dict(title="Flip Rate (%)",ticksuffix="%",range=[0,70],
                    color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-        xaxis=dict(color=TEXT_SEC),height=270,
+        xaxis=dict(color=TEXT_SEC), height=290,
     ))
     return fig
 
-def make_drg_box_fig(dff,title):
-    fig=go.Figure()
+def make_drg_box(dff, title="LOS"):
+    fig = go.Figure()
     for lbl,color,sub in [("Stayed",ACCENT5,dff[dff["Flipped"]==0]),
                            ("Flipped",ACCENT2,dff[dff["Flipped"]==1])]:
         if len(sub)>0:
@@ -478,448 +482,303 @@ def make_drg_box_fig(dff,title):
                   annotation_font=dict(color=TEXT_SEC,size=10))
     fig.update_layout(**CL(
         yaxis=dict(title="Hours in OU",color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-        xaxis=dict(color=TEXT_SEC),height=310,
+        xaxis=dict(color=TEXT_SEC), height=320,
         title=dict(text=title,font=dict(size=12,color=TEXT_SEC)),
     ))
     return fig
 
 # =============================================================================
-# UI HELPERS
+# SIDEBAR NAVIGATION
 # =============================================================================
-def kpi_card(icon, value, label, sub, color):
-    return html.Div([
-        html.Span(icon, className="kpi-icon"),
-        html.Div(value, className=f"kpi-value {color}"),
-        html.Div(label, className="kpi-label"),
-        html.Div(sub,   className="kpi-sub"),
-    ], className=f"kpi-card {color}")
+with st.sidebar:
+    st.markdown("""
+    <div style='padding:10px 0 18px; border-bottom:1px solid #1E293B; margin-bottom:16px;'>
+        <div style='font-size:2rem; margin-bottom:6px;'>🏥</div>
+        <div style='font-size:1rem; font-weight:700; color:#F1F5F9;'>Montanaro OU</div>
+        <div style='font-size:0.75rem; color:#64748B;'>Analytics Dashboard</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-def glass(*children, style=None):
-    s = {}
-    if style: s.update(style)
-    return html.Div(list(children), className="glass-card", style=s)
+    page = st.radio(
+        "NAVIGATION",
+        options=["📊 Patient Overview",
+                 "🔬 Diagnosis Analysis",
+                 "🩺 Vitals Analysis",
+                 "🤖 Predictive Model",
+                 "💡 Exclusion List"],
+        label_visibility="visible",
+    )
 
-def ctitle(icon, text):
-    return html.Div([html.Span(icon,style={"marginRight":"6px"}),html.Span(text)],
-                    className="chart-title")
-
-def vitals_panel():
-    vitals_info = [
-        ("BloodPressureUpper","Systolic BP","mmHg"),
-        ("BloodPressureLower","Diastolic BP","mmHg"),
-        ("Pulse","Heart Rate","bpm"),
-        ("PulseOximetry","O2 Saturation","%"),
-        ("Respirations","Respirations","br/min"),
-        ("Temperature","Temperature","F"),
-    ]
-    items=[]
-    for col,lbl,unit in vitals_info:
-        sm = round(df[df["Flipped"]==0][col].mean(),1)
-        fm = round(df[df["Flipped"]==1][col].mean(),1)
-        diff = round(fm-sm,1)
-        arrow = "up" if diff>0 else "dn"
-        ac    = ACCENT2 if diff>0 else ACCENT3
-        pct   = min(fm/df[col].max()*100,100)
-        items.append(html.Div([
-            html.Div([
-                html.Span(lbl,style={"color":TEXT_PRI,"fontSize":"0.83rem","fontWeight":"600"}),
-                html.Span(f"{'↑' if diff>0 else '↓'} {abs(diff)} {unit}",
-                          style={"color":ac,"fontSize":"0.73rem","fontWeight":"600","marginLeft":"auto"}),
-            ],style={"display":"flex","alignItems":"center","marginBottom":"3px"}),
-            html.Div([
-                html.Span(f"Stayed: {sm}",style={"color":TEXT_SEC,"fontSize":"0.73rem"}),
-                html.Span("  ·  ",style={"color":BORDER}),
-                html.Span(f"Flipped: {fm}",style={"color":TEXT_PRI,"fontSize":"0.73rem"}),
-            ]),
-            html.Div(html.Div(style={
-                "width":f"{pct:.0f}%","height":"100%","borderRadius":"4px",
-                "background":f"linear-gradient(90deg,{ac},{ac}88)",
-            }),className="progress-bg",style={"marginTop":"5px"}),
-        ],className="vitals-row-item"))
-    return html.Div(items)
-
-def sidebar_nav(active):
-    items=[
-        ("tab-overview",  "📊","Patient Overview"),
-        ("tab-diagnosis", "🔬","Diagnosis Analysis"),
-        ("tab-vitals",    "🩺","Vitals Analysis"),
-        ("tab-model",     "🤖","Predictive Model"),
-        ("tab-recommend", "💡","Exclusion List"),
-    ]
-    btns=[]
-    for tid,icon,label in items:
-        cls="nav-btn active" if tid==active else "nav-btn"
-        btns.append(html.Button(
-            [html.Span(icon,className="nav-icon"),html.Span(label)],
-            id=f"nav-{tid}",className=cls,
-        ))
-    return html.Div([
-        html.Div([
-            html.Div("🏥",style={"fontSize":"1.9rem","marginBottom":"5px"}),
-            html.H3("Montanaro OU"),
-            html.P("Analytics Dashboard"),
-        ],className="sidebar-logo"),
-        html.Div([
-            html.Div("NAVIGATION",className="nav-section-label"),
-            *btns,
-        ],className="sidebar-nav"),
-        html.Div([
-            html.P("BDA 640 Final Case"),
-            html.P("Hospital OU Operations",style={"marginTop":"2px"}),
-        ],className="sidebar-footer"),
-    ],className="sidebar")
-
-def topbar(title):
-    return html.Div([
-        html.Div(title,className="topbar-title"),
-        html.Div([
-            html.Span(className="live-dot"),
-            html.Span("Live",style={"color":TEXT_SEC,"fontSize":"0.78rem","marginRight":"14px"}),
-            html.Span("BDA 640",className="topbar-badge"),
-        ],style={"display":"flex","alignItems":"center"}),
-    ],className="topbar")
+    st.markdown("<hr style='border-color:#1E293B;margin:20px 0 14px;'>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style='font-size:0.7rem; color:#475569;'>
+        BDA 640 Final Case<br>Hospital OU Operations
+    </div>
+    """, unsafe_allow_html=True)
 
 # =============================================================================
-# PAGES
+# TOP BAR
 # =============================================================================
-def page_overview():
-    return html.Div([
-        topbar("📊 Patient Population Overview"),
-        html.Div([
-            dbc.Row([
-                dbc.Col(kpi_card("👥",f"{total_patients:,}","Total Patients","Medicine service","indigo"),md=2),
-                dbc.Col(kpi_card("🔄",f"{flip_rate:.1f}%","Flip Rate",f"{flip_n} flipped","red"),md=2),
-                dbc.Col(kpi_card("⏱",f"{avg_los_all:.1f}h","Avg LOS (All)","Mean OU stay","blue"),md=2),
-                dbc.Col(kpi_card("📈",f"{avg_los_flipped:.1f}h","LOS (Flipped)","Converted pts","amber"),md=2),
-                dbc.Col(kpi_card("📉",f"{avg_los_stayed:.1f}h","LOS (Stayed)","Obs discharge","green"),md=2),
-                dbc.Col(kpi_card("🧑‍⚕",f"{avg_age:.0f}","Mean Age","Patient population","teal"),md=2),
-            ],className="g-3",style={"marginBottom":"20px"}),
-            dbc.Row([
-                dbc.Col([
-                    html.Div([
-                        html.Div("🎛  Filters",style={"fontWeight":"700","color":TEXT_PRI,
-                                                       "fontSize":"0.88rem","marginBottom":"14px"}),
-                        html.Span("Insurance",className="filter-label"),
-                        dcc.Checklist(id="filter-insurance",
-                            options=[{"label":f"  {i}","value":i} for i in df["InsuranceGroup"].unique()],
-                            value=df["InsuranceGroup"].unique().tolist(),
-                            labelStyle={"display":"block","fontSize":"0.82rem","marginBottom":"5px","color":TEXT_SEC},
-                            inputStyle={"marginRight":"7px","accentColor":ACCENT1}),
-                        html.Hr(className="divider"),
-                        html.Span("Gender",className="filter-label"),
-                        dcc.Checklist(id="filter-gender",
-                            options=[{"label":"  Male","value":"Male"},{"label":"  Female","value":"Female"}],
-                            value=["Male","Female"],
-                            labelStyle={"display":"block","fontSize":"0.82rem","marginBottom":"5px","color":TEXT_SEC},
-                            inputStyle={"marginRight":"7px","accentColor":ACCENT1}),
-                        html.Hr(className="divider"),
-                        html.Span("Age Range",className="filter-label"),
-                        dcc.RangeSlider(id="filter-age",min=19,max=89,step=1,value=[19,89],
-                            marks={i:{"label":str(i),"style":{"color":TEXT_SEC,"fontSize":"0.68rem"}} for i in range(20,90,10)},
-                            tooltip={"placement":"bottom","always_visible":True}),
-                    ],className="filter-panel"),
-                ],md=2),
-                dbc.Col([
-                    dbc.Row([
-                        dbc.Col(glass(ctitle("📈","Age Distribution"),
-                            dcc.Graph(id="chart-age-hist",config={"displayModeBar":False})),md=6),
-                        dbc.Col(glass(ctitle("🏥","Flip Rate by Insurance"),
-                            dcc.Graph(id="chart-ins-bar",config={"displayModeBar":False})),md=6),
-                    ],className="g-3"),
-                    glass(ctitle("🎻","OU Length of Stay: Flipped vs. Stayed"),
-                        dcc.Graph(id="chart-los",figure=make_los(),config={"displayModeBar":False})),
-                ],md=10),
-            ],className="g-3"),
-        ],className="page-content"),
-    ])
-
-def page_diagnosis():
-    return html.Div([
-        topbar("🔬 Diagnosis Deep-Dive"),
-        html.Div([
-            dbc.Row([
-                dbc.Col(glass(ctitle("📊","Flip Rate by Diagnosis"),
-                    dcc.Graph(figure=make_flip_drg(),config={"displayModeBar":False})),md=6),
-                dbc.Col(glass(ctitle("🔥","Flip Rate Heatmap: Diagnosis x Age Group"),
-                    dcc.Graph(figure=make_heatmap(),config={"displayModeBar":False})),md=6),
-            ],className="g-3"),
-            glass(
-                ctitle("📦","LOS Distribution — Select Diagnosis to Filter"),
-                dcc.Dropdown(id="drg-selector",
-                    options=[{"label":v,"value":v} for v in sorted(df["DiagnosisName"].unique())],
-                    value=None, placeholder="Select a diagnosis...",
-                    style={"backgroundColor":BG_CARD2,"color":TEXT_PRI,
-                           "border":f"1px solid {BORDER}","borderRadius":"8px",
-                           "marginBottom":"14px","maxWidth":"360px"}),
-                dcc.Graph(id="chart-drg-detail",config={"displayModeBar":False}),
-            ),
-        ],className="page-content"),
-    ])
-
-def page_vitals():
-    return html.Div([
-        topbar("🩺 Vital Signs Analysis"),
-        html.Div([
-            dbc.Row([
-                dbc.Col(glass(ctitle("🕸","Vitals Radar: Flipped vs. Stayed"),
-                    dcc.Graph(figure=make_radar(),config={"displayModeBar":False})),md=5),
-                dbc.Col(glass(ctitle("📋","Mean Vitals Comparison"),vitals_panel()),md=7),
-            ],className="g-3"),
-            glass(ctitle("🚨","Abnormal Vital Flags: Flipped vs. Stayed"),
-                dcc.Graph(figure=make_flags(),config={"displayModeBar":False})),
-        ],className="page-content"),
-    ])
-
-def page_model():
-    banner=html.Div([
-        html.Span("ℹ",style={"fontSize":"1rem","marginRight":"8px","color":ACCENT1}),
-        html.Span("Three ML models trained to predict patient flip probability. "
-                  "Run python3 predictive_model.py first for full results.",
-                  style={"color":TEXT_SEC,"fontSize":"0.82rem"}),
-    ],className="info-banner")
-    return html.Div([
-        topbar("🤖 Predictive Model Results"),
-        html.Div([
-            banner,
-            dbc.Row([
-                dbc.Col(glass(ctitle("📊","Model Performance (ROC-AUC)"),
-                    dcc.Graph(figure=make_model_bar(),config={"displayModeBar":False})),md=6),
-                dbc.Col(glass(
-                    ctitle("⚠","Predicted Flip Risk by Diagnosis"),
-                    html.Div([
-                        html.Span("High Risk",className="risk-high",style={"marginRight":"8px"}),
-                        html.Span("Medium Risk",className="risk-medium",style={"marginRight":"8px"}),
-                        html.Span("Low Risk",className="risk-low"),
-                    ],style={"marginBottom":"10px"}),
-                    dcc.Graph(figure=make_drg_risk(),config={"displayModeBar":False})),md=6),
-            ],className="g-3"),
-            glass(ctitle("💡","How to Interpret"),
-                dbc.Row([
-                    dbc.Col([
-                        html.Div("What is ROC-AUC?",
-                            style={"color":TEXT_PRI,"fontWeight":"600","fontSize":"0.86rem","marginBottom":"6px"}),
-                        html.P("Measures ability to distinguish flippers from non-flippers. "
-                               "1.0 = perfect, 0.5 = random. Scores >0.70 are clinically meaningful.",
-                               style={"color":TEXT_SEC,"fontSize":"0.8rem","lineHeight":"1.65"}),
-                    ],md=4),
-                    dbc.Col([
-                        html.Div("Risk Tiers",
-                            style={"color":TEXT_PRI,"fontWeight":"600","fontSize":"0.86rem","marginBottom":"6px"}),
-                        html.P("Diagnoses with predicted flip probability >55% are High Risk — "
-                               "prime candidates for the expanded exclusion list.",
-                               style={"color":TEXT_SEC,"fontSize":"0.8rem","lineHeight":"1.65"}),
-                    ],md=4),
-                    dbc.Col([
-                        html.Div("Which Model to Trust?",
-                            style={"color":TEXT_PRI,"fontWeight":"600","fontSize":"0.86rem","marginBottom":"6px"}),
-                        html.P("Gradient Boosting typically achieves highest AUC. "
-                               "Logistic Regression is most interpretable for clinical staff.",
-                               style={"color":TEXT_SEC,"fontSize":"0.8rem","lineHeight":"1.65"}),
-                    ],md=4),
-                ],className="g-3"),
-            ),
-        ],className="page-content"),
-    ])
-
-def page_recommend():
-    return html.Div([
-        topbar("💡 Exclusion List & Financial Impact"),
-        html.Div([
-            dbc.Row([
-                dbc.Col([
-                    glass(ctitle("📋","Current Exclusion List (6 Diagnoses)"),
-                        html.Div([
-                            html.Div([
-                                html.Span("●",style={"color":"#64748B","marginRight":"10px","flexShrink":"0"}),
-                                html.Span(item),
-                            ],className="excl-item current")
-                            for item in ["Alcohol Intoxication","Alcohol Withdrawal",
-                                "Mental Health Disorder","Obstetrics Patients",
-                                "Sickle Cell Anemia Crisis","Cerebrovascular Accident (Stroke)"]
-                        ]),
-                    ),
-                    glass(ctitle("✅","Data-Supported Additions"),
-                        html.Div([
-                            html.Div([
-                                html.Span("✓",style={"color":ACCENT3,"fontWeight":"700","marginRight":"10px","flexShrink":"0"}),
-                                html.Span(item,style={"flex":"1"}),
-                                html.Span(badge,style={"fontSize":"0.7rem","color":ACCENT4,"marginLeft":"8px","whiteSpace":"nowrap"}),
-                            ],className="excl-item add")
-                            for item,badge in [
-                                ("Congestive Heart Failure","61%+ flip rate"),
-                                ("Pancreatitis","70%+ flip rate"),
-                                ("Urinary Tract Infection","66%+ flip rate"),
-                                ("Pneumonia","57%+ flip rate"),
-                                ("GI Bleeding","52%+ flip rate"),
-                            ]
-                        ]),
-                    ),
-                ],md=5),
-                dbc.Col([
-                    glass(ctitle("🎯","Capacity Impact Calculator"),
-                        html.Span("Target Flip Rate After Intervention (%)",className="filter-label"),
-                        dcc.Slider(id="flip-target-slider",min=10,max=45,step=5,value=20,
-                            marks={i:{"label":f"{i}%","style":{"color":TEXT_SEC,"fontSize":"0.7rem"}}
-                                   for i in range(10,50,5)},
-                            tooltip={"placement":"bottom","always_visible":True}),
-                        html.Div(id="impact-output",style={"marginTop":"18px"}),
-                        dcc.Graph(id="waterfall-chart",config={"displayModeBar":False}),
-                    ),
-                ],md=7),
-            ],className="g-3"),
-            dbc.Row([
-                dbc.Col(glass(
-                    html.Div("🚨",style={"fontSize":"1.8rem","marginBottom":"7px"}),
-                    html.Div("~1,900",className="impact-num",style={"color":ACCENT2}),
-                    html.Div("LWBS Cases/Year",className="kpi-label",style={"marginTop":"4px"}),
-                    html.Div("Leave-without-being-seen",className="kpi-sub"),
-                ),md=3),
-                dbc.Col(glass(
-                    html.Div("💵",style={"fontSize":"1.8rem","marginBottom":"7px"}),
-                    html.Div("$700",className="impact-num",style={"color":ACCENT5}),
-                    html.Div("Revenue per ED Visit",className="kpi-label",style={"marginTop":"4px"}),
-                    html.Div("Average reimbursement",className="kpi-sub"),
-                ),md=3),
-                dbc.Col(glass(
-                    html.Div("📈",style={"fontSize":"1.8rem","marginBottom":"7px"}),
-                    html.Div("$399K+",className="impact-num",style={"color":ACCENT3}),
-                    html.Div("Potential Revenue Gain",className="kpi-label",style={"marginTop":"4px"}),
-                    html.Div("30% LWBS reduction via throughput",className="kpi-sub"),
-                ),md=3),
-                dbc.Col(glass(
-                    html.Div("🏥",style={"fontSize":"1.8rem","marginBottom":"7px"}),
-                    html.Div("260-570",className="impact-num",style={"color":ACCENT4}),
-                    html.Div("Extra Patients/Year",className="kpi-label",style={"marginTop":"4px"}),
-                    html.Div("Reducing flip rate to 20-33%",className="kpi-sub"),
-                ),md=3),
-            ],className="g-3"),
-        ],className="page-content"),
-    ])
+page_titles = {
+    "📊 Patient Overview":  "📊 Patient Population Overview",
+    "🔬 Diagnosis Analysis":"🔬 Diagnosis Deep-Dive",
+    "🩺 Vitals Analysis":   "🩺 Vital Signs Analysis",
+    "🤖 Predictive Model":  "🤖 Predictive Model Results",
+    "💡 Exclusion List":    "💡 Exclusion List & Financial Impact",
+}
+st.markdown(f"""
+<div style='display:flex; align-items:center; justify-content:space-between;
+     background:rgba(17,24,39,0.96); border-bottom:1px solid #1E293B;
+     padding:14px 4px; margin-bottom:22px;'>
+  <div style='font-size:1.1rem; font-weight:700; color:#F1F5F9;'>{page_titles[page]}</div>
+  <div style='display:flex; align-items:center; gap:10px;'>
+    <span class="live-dot"></span>
+    <span style='color:#94A3B8; font-size:0.78rem;'>Live</span>
+    <span class="topbar-badge">BDA 640</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # =============================================================================
-# APP
+# ── PAGE 1: PATIENT OVERVIEW ──
 # =============================================================================
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
-                title="Montanaro OU Analytics", suppress_callback_exceptions=True)
+if page == "📊 Patient Overview":
 
-app.index_string = f"""<!DOCTYPE html>
-<html><head>{{%metas%}}<title>{{%title%}}</title>{{%favicon%}}{{%css%}}
-<style>{CSS}</style></head>
-<body>{{%app_entry%}}<footer>{{%config%}}{{%scripts%}}{{%renderer%}}</footer></body></html>"""
+    # KPI Row
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1.metric("👥 Total Patients",  f"{total_patients:,}",    "Medicine service")
+    c2.metric("🔄 Flip Rate",       f"{flip_rate:.1f}%",      f"{flip_n} flipped")
+    c3.metric("⏱ Avg LOS (All)",   f"{avg_los_all:.1f}h",    "Mean OU stay")
+    c4.metric("📈 LOS (Flipped)",   f"{avg_los_flipped:.1f}h","Converted pts")
+    c5.metric("📉 LOS (Stayed)",    f"{avg_los_stayed:.1f}h", "Obs discharge")
+    c6.metric("🧑‍⚕ Mean Age",        f"{avg_age:.0f}",         "Patient population")
 
-app.layout = html.Div([
-    dcc.Store(id="active-tab", data="tab-overview"),
-    html.Div(id="sidebar-container"),
-    html.Div(id="page-container", className="main-content"),
-], style={"fontFamily":FONT,"backgroundColor":BG_DARK})
+    st.markdown("<br>", unsafe_allow_html=True)
 
-# Single unified callback — all 5 nav buttons in one
-@app.callback(
-    Output("active-tab","data"),
-    [Input("nav-tab-overview","n_clicks"),
-     Input("nav-tab-diagnosis","n_clicks"),
-     Input("nav-tab-vitals","n_clicks"),
-     Input("nav-tab-model","n_clicks"),
-     Input("nav-tab-recommend","n_clicks")],
-    prevent_initial_call=True,
-)
-def switch_tab(n1, n2, n3, n4, n5):
-    triggered = dash.ctx.triggered_id
-    if triggered:
-        return triggered.replace("nav-", "")
-    return dash.no_update
+    # Filters + Charts
+    col_filt, col_charts = st.columns([1, 4])
 
-@app.callback(
-    [Output("sidebar-container","children"), Output("page-container","children")],
-    Input("active-tab","data"),
-)
-def render(tab):
-    pages = {"tab-overview":page_overview,"tab-diagnosis":page_diagnosis,
-             "tab-vitals":page_vitals,"tab-model":page_model,"tab-recommend":page_recommend}
-    return sidebar_nav(tab), pages.get(tab, page_overview)()
+    with col_filt:
+        st.markdown("**🎛 Filters**")
+        ins_options = df["InsuranceGroup"].unique().tolist()
+        ins_vals    = st.multiselect("Insurance", ins_options, default=ins_options)
+        gender_vals = st.multiselect("Gender", ["Male","Female"], default=["Male","Female"])
+        age_range   = st.slider("Age Range", 19, 89, (19, 89))
 
-@app.callback(
-    [Output("chart-age-hist","figure"),
-     Output("chart-ins-bar","figure"),
-     Output("chart-los","figure")],
-    [Input("filter-insurance","value"),
-     Input("filter-gender","value"),
-     Input("filter-age","value")],
-)
-def update_overview(ins_vals, gender_vals, age_range):
+    # Apply filters
     dff = df[
-        (df["InsuranceGroup"].isin(ins_vals or [])) &
-        (df["Gender"].isin(gender_vals or [])) &
+        (df["InsuranceGroup"].isin(ins_vals)) &
+        (df["Gender"].isin(gender_vals)) &
         (df["Age"] >= age_range[0]) &
         (df["Age"] <= age_range[1])
     ]
-    if len(dff)==0:
-        empty=go.Figure()
-        empty.update_layout(paper_bgcolor="rgba(0,0,0,0)",
-                            plot_bgcolor="rgba(255,255,255,0.02)")
-        return empty,empty,empty
 
-    fig_los=go.Figure()
-    for lbl,color,fill,sub in [
-        ("Stayed",ACCENT5,"rgba(59,130,246,0.15)",dff[dff["Flipped"]==0]),
-        ("Flipped",ACCENT2,"rgba(236,72,153,0.15)",dff[dff["Flipped"]==1]),
-    ]:
-        if len(sub)>0:
-            fig_los.add_trace(go.Violin(y=sub["OU_LOS_hrs"],name=lbl,box_visible=True,
-                meanline_visible=True,fillcolor=fill,line_color=color,opacity=0.9,
-                points="outliers",marker=dict(size=3,color=color,opacity=0.4)))
-    fig_los.add_hline(y=48,line_dash="dot",line_color="rgba(255,255,255,0.18)")
-    fig_los.update_layout(**CL(
-        yaxis=dict(title="Hours in OU",color=TEXT_SEC,gridcolor="rgba(255,255,255,0.04)"),
-        xaxis=dict(color=TEXT_SEC),height=310,
-        legend=dict(orientation="h",y=1.1,bgcolor="rgba(0,0,0,0)",font=dict(color=TEXT_SEC,size=11)),
-    ))
-    return make_age_hist_fig(dff), make_ins_bar_fig(dff), fig_los
+    with col_charts:
+        r1c1, r1c2 = st.columns(2)
+        with r1c1:
+            st.markdown("**📈 Age Distribution**")
+            st.plotly_chart(make_age_hist(dff), use_container_width=True, config={"displayModeBar":False})
+        with r1c2:
+            st.markdown("**🏥 Flip Rate by Insurance**")
+            st.plotly_chart(make_ins_bar(dff), use_container_width=True, config={"displayModeBar":False})
 
-@app.callback(Output("chart-drg-detail","figure"), Input("drg-selector","value"))
-def drg_detail(sel):
-    dff = df if not sel else df[df["DiagnosisName"]==sel]
-    return make_drg_box_fig(dff, f"LOS — {sel or 'All Diagnoses'}")
-
-@app.callback(
-    [Output("waterfall-chart","figure"), Output("impact-output","children")],
-    Input("flip-target-slider","value"),
-)
-def update_impact(target_pct):
-    extra    = max(0,round(current_per_wk*(1-target_pct/100)/(1-0.46))-current_per_wk)
-    extra_yr = extra*52
-    rev      = round(extra_yr*0.2)*700
-    impact   = dbc.Row([
-        dbc.Col(html.Div([
-            html.Div(f"+{extra}/wk",className="impact-num",style={"color":ACCENT3}),
-            html.Div("Extra patients/week",className="kpi-sub",style={"marginTop":"4px"}),
-        ],style={"textAlign":"center","padding":"10px 0"}),md=4),
-        dbc.Col(html.Div([
-            html.Div(f"+{extra_yr:,}/yr",className="impact-num",style={"color":ACCENT5}),
-            html.Div("Additional patients/year",className="kpi-sub",style={"marginTop":"4px"}),
-        ],style={"textAlign":"center","padding":"10px 0"}),md=4),
-        dbc.Col(html.Div([
-            html.Div(f"${rev:,.0f}",className="impact-num",style={"color":ACCENT4}),
-            html.Div("Est. revenue gain",className="kpi-sub",style={"marginTop":"4px"}),
-        ],style={"textAlign":"center","padding":"10px 0"}),md=4),
-    ],className="g-2",style={"marginBottom":"14px"})
-    return make_waterfall(target_pct), impact
+        st.markdown("**🎻 OU Length of Stay: Flipped vs. Stayed**")
+        st.plotly_chart(make_los(dff), use_container_width=True, config={"displayModeBar":False})
 
 # =============================================================================
-# SERVER — expose for gunicorn (Render.com deployment)
+# ── PAGE 2: DIAGNOSIS ANALYSIS ──
 # =============================================================================
-server = app.server  # gunicorn needs this line
+elif page == "🔬 Diagnosis Analysis":
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**📊 Flip Rate by Diagnosis**")
+        st.plotly_chart(make_flip_drg(), use_container_width=True, config={"displayModeBar":False})
+    with col2:
+        st.markdown("**🔥 Flip Rate Heatmap: Diagnosis × Age Group**")
+        st.plotly_chart(make_heatmap(), use_container_width=True, config={"displayModeBar":False})
+
+    st.markdown("---")
+    st.markdown("**📦 LOS Distribution — Select Diagnosis to Filter**")
+    sel = st.selectbox("Select a diagnosis", ["All Diagnoses"] + sorted(df["DiagnosisName"].dropna().unique().tolist()))
+    dff = df if sel == "All Diagnoses" else df[df["DiagnosisName"] == sel]
+    st.plotly_chart(make_drg_box(dff, f"LOS — {sel}"), use_container_width=True, config={"displayModeBar":False})
 
 # =============================================================================
-# RUN
+# ── PAGE 3: VITALS ANALYSIS ──
 # =============================================================================
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 8050))
-    app.run(
-        debug=False,
-        host="0.0.0.0",
-        port=port,
-        use_reloader=False,    # prevents signal thread error
-        dev_tools_hot_reload=False
-    )
+elif page == "🩺 Vitals Analysis":
+
+    col1, col2 = st.columns([2, 3])
+
+    with col1:
+        st.markdown("**🕸 Vitals Radar: Flipped vs. Stayed**")
+        st.plotly_chart(make_radar(), use_container_width=True, config={"displayModeBar":False})
+
+    with col2:
+        st.markdown("**📋 Mean Vitals Comparison**")
+        vitals_info = [
+            ("BloodPressureUpper","Systolic BP","mmHg"),
+            ("BloodPressureLower","Diastolic BP","mmHg"),
+            ("Pulse","Heart Rate","bpm"),
+            ("PulseOximetry","O2 Saturation","%"),
+            ("Respirations","Respirations","br/min"),
+            ("Temperature","Temperature","F"),
+        ]
+        for col_name, lbl, unit in vitals_info:
+            sm   = round(df[df["Flipped"]==0][col_name].mean(), 1)
+            fm   = round(df[df["Flipped"]==1][col_name].mean(), 1)
+            diff = round(fm - sm, 1)
+            arrow = "↑" if diff > 0 else "↓"
+            color = "#F87171" if diff > 0 else "#34D399"
+            pct   = min(fm / df[col_name].max() * 100, 100)
+            st.markdown(f"""
+            <div style='background:rgba(255,255,255,0.03);border:1px solid #1E293B;
+                 border-radius:10px;padding:10px 14px;margin-bottom:7px;'>
+              <div style='display:flex;justify-content:space-between;margin-bottom:3px;'>
+                <span style='color:#F1F5F9;font-size:0.83rem;font-weight:600;'>{lbl}</span>
+                <span style='color:{color};font-size:0.73rem;font-weight:600;'>{arrow} {abs(diff)} {unit}</span>
+              </div>
+              <div style='font-size:0.73rem;color:#94A3B8;'>
+                Stayed: {sm} &nbsp;·&nbsp; Flipped: {fm}
+              </div>
+              <div style='background:rgba(255,255,255,0.06);border-radius:4px;height:5px;
+                   overflow:hidden;margin-top:5px;'>
+                <div style='width:{pct:.0f}%;height:100%;border-radius:4px;
+                     background:linear-gradient(90deg,{color},{color}88);'></div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("**🚨 Abnormal Vital Flags: Flipped vs. Stayed**")
+    st.plotly_chart(make_flags(), use_container_width=True, config={"displayModeBar":False})
+
+# =============================================================================
+# ── PAGE 4: PREDICTIVE MODEL ──
+# =============================================================================
+elif page == "🤖 Predictive Model":
+
+    st.markdown("""
+    <div class="info-banner">
+        ℹ️ &nbsp;Three ML models trained to predict patient flip probability.
+        Run <code>python3 predictive_model.py</code> first for full results.
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**📊 Model Performance (ROC-AUC)**")
+        st.plotly_chart(make_model_bar(), use_container_width=True, config={"displayModeBar":False})
+
+    with col2:
+        st.markdown("**⚠ Predicted Flip Risk by Diagnosis**")
+        st.markdown("""
+        <span class="risk-high">High Risk</span>&nbsp;
+        <span class="risk-medium">Medium Risk</span>&nbsp;
+        <span class="risk-low">Low Risk</span>
+        <br><br>
+        """, unsafe_allow_html=True)
+        st.plotly_chart(make_drg_risk(), use_container_width=True, config={"displayModeBar":False})
+
+    st.markdown("---")
+    st.markdown("**💡 How to Interpret**")
+    ic1, ic2, ic3 = st.columns(3)
+    with ic1:
+        st.markdown("**What is ROC-AUC?**")
+        st.markdown("<span style='color:#94A3B8;font-size:0.82rem;'>Measures ability to distinguish flippers from non-flippers. 1.0 = perfect, 0.5 = random. Scores >0.70 are clinically meaningful.</span>", unsafe_allow_html=True)
+    with ic2:
+        st.markdown("**Risk Tiers**")
+        st.markdown("<span style='color:#94A3B8;font-size:0.82rem;'>Diagnoses with predicted flip probability >55% are High Risk — prime candidates for the expanded exclusion list.</span>", unsafe_allow_html=True)
+    with ic3:
+        st.markdown("**Which Model to Trust?**")
+        st.markdown("<span style='color:#94A3B8;font-size:0.82rem;'>Gradient Boosting typically achieves highest AUC. Logistic Regression is most interpretable for clinical staff.</span>", unsafe_allow_html=True)
+
+# =============================================================================
+# ── PAGE 5: EXCLUSION LIST ──
+# =============================================================================
+elif page == "💡 Exclusion List":
+
+    col1, col2 = st.columns([2, 3])
+
+    with col1:
+        st.markdown("**📋 Current Exclusion List (6 Diagnoses)**")
+        current_list = ["Alcohol Intoxication","Alcohol Withdrawal",
+                        "Mental Health Disorder","Obstetrics Patients",
+                        "Sickle Cell Anemia Crisis","Cerebrovascular Accident (Stroke)"]
+        for item in current_list:
+            st.markdown(f"""
+            <div class='excl-item excl-current'>
+                <span style='color:#64748B;'>●</span>
+                <span>{item}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>**✅ Data-Supported Additions**", unsafe_allow_html=True)
+        additions = [
+            ("Congestive Heart Failure","61%+ flip rate"),
+            ("Pancreatitis",            "70%+ flip rate"),
+            ("Urinary Tract Infection", "66%+ flip rate"),
+            ("Pneumonia",               "57%+ flip rate"),
+            ("GI Bleeding",             "52%+ flip rate"),
+        ]
+        for item, badge in additions:
+            st.markdown(f"""
+            <div class='excl-item excl-add'>
+                <span style='color:#10B981;font-weight:700;'>✓</span>
+                <span style='flex:1;'>{item}</span>
+                <span style='font-size:0.7rem;color:#F59E0B;white-space:nowrap;'>{badge}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("**🎯 Capacity Impact Calculator**")
+        target_pct = st.slider("Target Flip Rate After Intervention (%)", 10, 45, 20, step=5)
+
+        extra    = max(0, round(current_per_wk*(1-target_pct/100)/(1-0.46)) - current_per_wk)
+        extra_yr = extra * 52
+        rev      = round(extra_yr * 0.2) * 700
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.markdown(f"""<div class='impact-box'>
+            <div class='impact-num' style='color:#10B981;'>+{extra}/wk</div>
+            <div class='impact-label'>Extra patients/week</div>
+        </div>""", unsafe_allow_html=True)
+        mc2.markdown(f"""<div class='impact-box'>
+            <div class='impact-num' style='color:#3B82F6;'>+{extra_yr:,}/yr</div>
+            <div class='impact-label'>Additional patients/year</div>
+        </div>""", unsafe_allow_html=True)
+        mc3.markdown(f"""<div class='impact-box'>
+            <div class='impact-num' style='color:#F59E0B;'>${rev:,.0f}</div>
+            <div class='impact-label'>Est. revenue gain</div>
+        </div>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.plotly_chart(make_waterfall(target_pct), use_container_width=True, config={"displayModeBar":False})
+
+    st.markdown("---")
+    b1, b2, b3, b4 = st.columns(4)
+    b1.markdown("""<div class='impact-box'>
+        <div style='font-size:1.8rem;margin-bottom:7px;'>🚨</div>
+        <div class='impact-num' style='color:#EC4899;'>~1,900</div>
+        <div class='impact-label'>LWBS Cases/Year</div>
+        <div class='impact-sub'>Leave-without-being-seen</div>
+    </div>""", unsafe_allow_html=True)
+    b2.markdown("""<div class='impact-box'>
+        <div style='font-size:1.8rem;margin-bottom:7px;'>💵</div>
+        <div class='impact-num' style='color:#3B82F6;'>$700</div>
+        <div class='impact-label'>Revenue per ED Visit</div>
+        <div class='impact-sub'>Average reimbursement</div>
+    </div>""", unsafe_allow_html=True)
+    b3.markdown("""<div class='impact-box'>
+        <div style='font-size:1.8rem;margin-bottom:7px;'>📈</div>
+        <div class='impact-num' style='color:#10B981;'>$399K+</div>
+        <div class='impact-label'>Potential Revenue Gain</div>
+        <div class='impact-sub'>30% LWBS reduction via throughput</div>
+    </div>""", unsafe_allow_html=True)
+    b4.markdown("""<div class='impact-box'>
+        <div style='font-size:1.8rem;margin-bottom:7px;'>🏥</div>
+        <div class='impact-num' style='color:#F59E0B;'>260-570</div>
+        <div class='impact-label'>Extra Patients/Year</div>
+        <div class='impact-sub'>Reducing flip rate to 20-33%</div>
+    </div>""", unsafe_allow_html=True)
